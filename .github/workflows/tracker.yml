@@ -2,8 +2,11 @@ name: MrBeast Tracker
 
 on:
   schedule:
-    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"  # run at every HH:00, HH:05, HH:10, etc.
-  workflow_dispatch:  # manual trigger
+    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # 👈 allow push access with GITHUB_TOKEN
 
 jobs:
   run-tracker:
@@ -13,7 +16,7 @@ jobs:
     - name: Checkout repo
       uses: actions/checkout@v3
       with:
-        persist-credentials: true  # allows push with GITHUB_TOKEN
+        persist-credentials: true
 
     - name: Set up Python
       uses: actions/setup-python@v4
