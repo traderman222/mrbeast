@@ -33,6 +33,6 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add mrbeast_views.csv
-        git commit -m "Update views/likes/comments [skip ci]" || echo "No changes"
+        git add mrbeast_views.csv videos_cache.json
+        git diff --cached --quiet || git commit -m "Update tracker data [skip ci]"
         git push
