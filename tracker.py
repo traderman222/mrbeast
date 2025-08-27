@@ -1,13 +1,16 @@
 import os
 import csv
 import time
+import json
 from googleapiclient.discovery import build
 import isodate
 
 # ---- CONFIG ----
-API_KEY = os.getenv("YOUTUBE_API_KEY")  # Read from GitHub Actions secret
-CHANNEL_ID = "UCX6OQ3DkcsbYNE6H8uQQuVA"  # MrBeast's channel ID
+API_KEY = os.getenv("YOUTUBE_API_KEY")  # GitHub Actions secret
+CHANNEL_ID = "UCX6OQ3DkcsbYNE6H8uQQuVA"  # MrBeast
 OUTPUT_FILE = "mrbeast_views.csv"
+CACHE_FILE = "videos_cache.json"
+MAX_TRACKED_VIDEOS = 16  # Quota safe limit
 
 # ---- YOUTUBE API CLIENT ----
 youtube = build("youtube", "v3", developerKey=API_KEY)
@@ -17,60 +20,130 @@ def iso8601_duration_to_seconds(duration):
     return int(isodate.parse_duration(duration).total_seconds())
 
 
-def get_latest_non_shorts_videos():
-    # Get uploads playlist ID
+def load_cache():
+    if os.path.isfile(CACHE_FILE):
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_cache(cache):
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def get_uploads_playlist_id():
+    """Fetch uploads playlist ID once (can be cached forever)."""
     channel_resp = youtube.channels().list(
         part="contentDetails", id=CHANNEL_ID
     ).execute()
-    uploads_playlist = channel_resp["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    return channel_resp["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-    # Fetch latest 30 videos (maxResults = 30)
+
+def get_latest_video_ids(playlist_id, max_results=50):
+    """Fetch up to 50 latest uploads (IDs only)."""
     playlist_resp = youtube.playlistItems().list(
         part="contentDetails",
-        playlistId=uploads_playlist,
-        maxResults=30
+        playlistId=playlist_id,
+        maxResults=max_results
     ).execute()
+    return [item["contentDetails"]["videoId"] for item in playlist_resp["items"]]
 
-    video_ids = [item["contentDetails"]["videoId"] for item in playlist_resp["items"]]
 
-    # Get video details
-    video_resp = youtube.videos().list(
-        part="contentDetails,statistics,snippet",
+def fetch_video_metadata(video_ids):
+    """Fetch title + duration once for new videos."""
+    resp = youtube.videos().list(
+        part="contentDetails,snippet",
         id=",".join(video_ids)
     ).execute()
 
-    # Filter out shorts (duration < 60s)
-    videos = []
-    for item in video_resp["items"]:
-        duration = item["contentDetails"]["duration"]
-        seconds = iso8601_duration_to_seconds(duration)
-        if seconds >= 3 * 60:
-            stats = item["statistics"]
-            videos.append({
-                "title": item["snippet"]["title"],
-                "id": item["id"],
-                "views": int(stats.get("viewCount", 0)),
-                "likes": int(stats.get("likeCount", 0)),
-                "comments": int(stats.get("commentCount", 0))
-            })
-
-    return videos
+    meta = {}
+    for item in resp["items"]:
+        duration = iso8601_duration_to_seconds(item["contentDetails"]["duration"])
+        meta[item["id"]] = {
+            "title": item["snippet"]["title"],
+            "duration": duration,
+        }
+    return meta
 
 
-def save_views():
-    videos = get_latest_non_shorts_videos()
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+def fetch_video_stats(video_ids):
+    """Fetch just statistics (cheaper)."""
+    resp = youtube.videos().list(
+        part="statistics",
+        id=",".join(video_ids)
+    ).execute()
 
+    stats = {}
+    for item in resp["items"]:
+        s = item["statistics"]
+        stats[item["id"]] = {
+            "views": int(s.get("viewCount", 0)),
+            "likes": int(s.get("likeCount", 0)),
+            "comments": int(s.get("commentCount", 0))
+        }
+    return stats
+
+
+def save_views(rows):
     file_exists = os.path.isfile(OUTPUT_FILE)
     with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["timestamp", "video_id", "title", "views", "likes", "comments"])
-        for v in videos:
-            writer.writerow([timestamp, v["id"], v["title"], v["views"], v["likes"], v["comments"]])
+            writer.writerow(["timestamp", "video_id", "views", "likes", "comments"])
+        writer.writerows(rows)
 
-    print(f"Saved {len(videos)} entries at {timestamp}")
+
+def main():
+    cache = load_cache()
+    playlist_id = cache.get("_uploads_playlist")
+
+    # fetch uploads playlist only once
+    if not playlist_id:
+        playlist_id = get_uploads_playlist_id()
+        cache["_uploads_playlist"] = playlist_id
+        save_cache(cache)
+
+    # get up to 50 latest uploads
+    latest_ids = get_latest_video_ids(playlist_id, max_results=50)
+
+    # detect new videos
+    new_ids = [vid for vid in latest_ids if vid not in cache]
+    if new_ids:
+        meta = fetch_video_metadata(new_ids)
+        for vid, m in meta.items():
+            # only track if not shorts (< 3 min)
+            if m["duration"] >= 3 * 60:
+                cache[vid] = m
+        save_cache(cache)
+
+    # filter long-form videos and limit to the most recent MAX_TRACKED_VIDEOS
+    tracked_ids = [
+        vid for vid in latest_ids
+        if vid in cache and cache[vid]["duration"] >= 3 * 60
+    ][:MAX_TRACKED_VIDEOS]
+
+    if not tracked_ids:
+        print("No long-form videos to track.")
+        return
+
+    # fetch stats for tracked videos
+    stats = fetch_video_stats(tracked_ids)
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    rows = []
+    for vid in tracked_ids:
+        vstats = stats.get(vid, {})
+        rows.append([
+            timestamp, vid,
+            vstats.get("views", 0),
+            vstats.get("likes", 0),
+            vstats.get("comments", 0)
+        ])
+
+    save_views(rows)
+    print(f"Saved {len(rows)} entries at {timestamp}")
 
 
 if __name__ == "__main__":
-    save_views()
+    main()
