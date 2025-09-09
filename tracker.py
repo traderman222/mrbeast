@@ -49,9 +49,11 @@ def get_latest_video_ids(playlist_id, max_results=50):
     ).execute()
     return [item["contentDetails"]["videoId"] for item in playlist_resp["items"]]
 
-
 def fetch_video_metadata(video_ids):
-    """Fetch title + duration + published date for new videos."""
+    """Fetch title + duration + published date for given videos."""
+    if not video_ids:
+        return {}
+
     resp = youtube.videos().list(
         part="contentDetails,snippet",
         id=",".join(video_ids)
@@ -64,10 +66,9 @@ def fetch_video_metadata(video_ids):
         meta[item["id"]] = {
             "title": item["snippet"]["title"],
             "duration": duration,
-            "publishedAt": published_at,  # <-- new field
+            "publishedAt": published_at,
         }
     return meta
-
 
 def fetch_video_stats(video_ids):
     """Fetch just statistics (cheaper)."""
@@ -111,12 +112,24 @@ def main():
 
     # detect new videos
     new_ids = [vid for vid in latest_ids if vid not in cache]
-    if new_ids:
-        meta = fetch_video_metadata(new_ids)
+
+    # detect old videos missing metadata (retroactive fix)
+    missing_meta_ids = [
+        vid for vid in cache
+        if vid not in ("_uploads_playlist",) and
+           ("publishedAt" not in cache[vid] or "title" not in cache[vid] or "duration" not in cache[vid])
+    ]
+
+    ids_to_fetch = new_ids + missing_meta_ids
+    if ids_to_fetch:
+        meta = fetch_video_metadata(ids_to_fetch)
         for vid, m in meta.items():
             # only track if not shorts (< 3 min)
             if m["duration"] >= 3 * 60:
-                cache[vid] = m
+                if vid in cache:
+                    cache[vid].update(m)  # update missing fields
+                else:
+                    cache[vid] = m
         save_cache(cache)
 
     # filter long-form videos and limit to the most recent MAX_TRACKED_VIDEOS
@@ -145,7 +158,3 @@ def main():
 
     save_views(rows)
     print(f"Saved {len(rows)} entries at {timestamp}")
-
-
-if __name__ == "__main__":
-    main()
