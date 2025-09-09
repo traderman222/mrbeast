@@ -158,3 +158,6 @@ def main():
 
     save_views(rows)
     print(f"Saved {len(rows)} entries at {timestamp}")
+
+if __name__ == "__main__":
+    main()
