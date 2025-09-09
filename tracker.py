@@ -51,7 +51,7 @@ def get_latest_video_ids(playlist_id, max_results=50):
 
 
 def fetch_video_metadata(video_ids):
-    """Fetch title + duration once for new videos."""
+    """Fetch title + duration + published date for new videos."""
     resp = youtube.videos().list(
         part="contentDetails,snippet",
         id=",".join(video_ids)
@@ -60,9 +60,11 @@ def fetch_video_metadata(video_ids):
     meta = {}
     for item in resp["items"]:
         duration = iso8601_duration_to_seconds(item["contentDetails"]["duration"])
+        published_at = item["snippet"]["publishedAt"]
         meta[item["id"]] = {
             "title": item["snippet"]["title"],
             "duration": duration,
+            "publishedAt": published_at,  # <-- new field
         }
     return meta
 
