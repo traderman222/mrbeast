@@ -4,8 +4,7 @@ import time
 import json
 from googleapiclient.discovery import build
 import isodate
-from datetime import datetime, timezonenow_utc = datetime.now(timezone.utc)
-timestamp_utc = now_utc.strftime("%Y-%m-%d %H:%M:%S")
+from datetime import datetime, timezone
 
 
 # ---- CONFIG ----
