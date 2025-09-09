@@ -4,6 +4,9 @@ import time
 import json
 from googleapiclient.discovery import build
 import isodate
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 
 # ---- CONFIG ----
 API_KEY = os.getenv("YOUTUBE_API_KEY")  # GitHub Actions secret
@@ -144,7 +147,8 @@ def main():
 
     # fetch stats for tracked videos
     stats = fetch_video_stats(tracked_ids)
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    prague_tz = ZoneInfo("Europe/Prague")
+    timestamp = datetime.now(prague_tz).isoformat()
 
     rows = []
     for vid in tracked_ids:
