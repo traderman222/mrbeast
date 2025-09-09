@@ -4,8 +4,8 @@ import time
 import json
 from googleapiclient.discovery import build
 import isodate
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezonenow_utc = datetime.now(timezone.utc)
+timestamp_utc = now_utc.strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ---- CONFIG ----
@@ -147,8 +147,8 @@ def main():
 
     # fetch stats for tracked videos
     stats = fetch_video_stats(tracked_ids)
-    prague_tz = ZoneInfo("Europe/Prague")
-    timestamp = datetime.now(prague_tz).isoformat()
+    now_utc = datetime.now(timezone.utc)
+    timestamp = now_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
 
     rows = []
     for vid in tracked_ids:
