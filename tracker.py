@@ -115,11 +115,14 @@ def main():
     # detect new videos
     new_ids = [vid for vid in latest_ids if vid not in cache]
 
-    # detect old videos missing metadata (retroactive fix)
+    # detect old videos missing metadata
     missing_meta_ids = [
         vid for vid in cache
         if vid not in ("_uploads_playlist",) and
-           ("publishedAt" not in cache[vid] or "title" not in cache[vid] or "duration" not in cache[vid])
+           isinstance(cache.get(vid), dict) and
+           ("publishedAt" not in cache[vid] or
+            "title" not in cache[vid] or
+            "duration" not in cache[vid])
     ]
 
     ids_to_fetch = new_ids + missing_meta_ids
@@ -129,23 +132,56 @@ def main():
             # only track if not shorts (< 3 min)
             if m["duration"] >= 3 * 60:
                 if vid in cache:
-                    cache[vid].update(m)  # update missing fields
+                    cache[vid].update(m)
                 else:
                     cache[vid] = m
         save_cache(cache)
 
-    # filter long-form videos and limit to the most recent MAX_TRACKED_VIDEOS
-    tracked_ids = [
+    # -------------------------------
+    # BUILD TRACKED IDS (REGRESSION SAFE)
+    # -------------------------------
+
+    # normal playlist-based selection
+    playlist_tracked = [
         vid for vid in latest_ids
-        if vid in cache and cache[vid]["duration"] >= 3 * 60
-    ][:MAX_TRACKED_VIDEOS]
+        if vid in cache and cache[vid].get("duration", 0) >= 3 * 60
+    ]
+
+    # sort cached videos by published date (newest first)
+    cached_videos_sorted = sorted(
+        [
+            vid for vid in cache
+            if vid not in ("_uploads_playlist",) and
+               isinstance(cache.get(vid), dict) and
+               "publishedAt" in cache[vid] and
+               cache[vid].get("duration", 0) >= 3 * 60
+        ],
+        key=lambda v: cache[v]["publishedAt"],
+        reverse=True
+    )
+
+    if cached_videos_sorted:
+        newest_cached = cached_videos_sorted[0]
+        newest_playlist = playlist_tracked[0] if playlist_tracked else None
+
+        # detect playlist regression (newest video disappeared)
+        if newest_playlist != newest_cached:
+            print("Detected YouTube playlist regression — using cache order")
+            tracked_ids = cached_videos_sorted[:MAX_TRACKED_VIDEOS]
+        else:
+            tracked_ids = playlist_tracked[:MAX_TRACKED_VIDEOS]
+    else:
+        tracked_ids = playlist_tracked[:MAX_TRACKED_VIDEOS]
 
     if not tracked_ids:
-        print("No long-form videos to track.")
-        return
+        print("WARNING: No tracked videos this run")
 
-    # fetch stats for tracked videos
-    stats = fetch_video_stats(tracked_ids)
+    # -------------------------------
+    # FETCH STATS + SAVE CSV
+    # -------------------------------
+
+    stats = fetch_video_stats(tracked_ids) if tracked_ids else {}
+
     now_utc = datetime.now(timezone.utc)
     timestamp = now_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -153,14 +189,18 @@ def main():
     for vid in tracked_ids:
         vstats = stats.get(vid, {})
         rows.append([
-            timestamp, vid,
+            timestamp,
+            vid,
             vstats.get("views", 0),
             vstats.get("likes", 0),
             vstats.get("comments", 0)
         ])
 
-    save_views(rows)
-    print(f"Saved {len(rows)} entries at {timestamp}")
+    if rows:
+        save_views(rows)
+        print(f"Saved {len(rows)} entries at {timestamp}")
+    else:
+        print("No rows saved (tracked_ids empty)")
 
 if __name__ == "__main__":
     main()
